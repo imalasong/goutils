@@ -1,40 +1,90 @@
 package eval
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"text/scanner"
 )
 
-// ---- lexer ----
-
-// This lexer is similar to the one described in Chapter 13.
-type lexer struct {
+type stringHelper struct {
 	scan  scanner.Scanner
-	token rune // current lookahead token
+	token rune
 }
 
-func (lex *lexer) next()        { lex.token = lex.scan.Scan() }
-func (lex *lexer) text() string { return lex.scan.TokenText() }
+func (s *stringHelper) next() {
+	s.token = s.scan.Scan()
+}
 
-type lexPanic string
+func (s *stringHelper) text() string {
+	return s.scan.TokenText()
+}
 
-// describe returns a string describing the current token, for use in errors.
-func (lex *lexer) describe() string {
-	switch lex.token {
+func (s *stringHelper) describe() string {
+	switch s.token {
 	case scanner.EOF:
 		return "end of file"
 	case scanner.Ident:
-		return fmt.Sprintf("identifier %s", lex.text())
+		return fmt.Sprintf("identifier %s", s.text())
 	case scanner.Int, scanner.Float:
-		return fmt.Sprintf("number %s", lex.text())
+		return fmt.Sprintf("number %s", s.text())
 	}
-	return fmt.Sprintf("%q", rune(lex.token)) // any other rune
+	return fmt.Sprintf("%q", rune(s.token)) // any other rune
 }
 
-func precedence(op rune) int {
-	switch op {
+type typePanic string
+
+func Parse(exprStr string) (expreR Expr, errR error) {
+
+	defer func() {
+		switch e := recover().(type) {
+		case nil:
+		case typePanic:
+			expreR = nil
+			errR = fmt.Errorf("%s", e)
+		default:
+			panic(e)
+		}
+	}()
+
+	if exprStr == "" {
+		return nil, errors.New("express not allow empty")
+	}
+	sh := new(stringHelper)
+	sh.scan.Init(strings.NewReader(exprStr))
+	sh.scan.Mode = scanner.ScanIdents | scanner.ScanInts | scanner.ScanFloats
+	sh.next()
+
+	//解析
+	expr := parseExpr(sh)
+	if sh.token != scanner.EOF {
+		panic(typePanic("unexpected " + sh.describe()))
+	}
+	return expr, nil
+}
+
+func parseExpr(sh *stringHelper) Expr {
+	return parseBinary(sh, 1)
+}
+
+func parseBinary(sh *stringHelper, level int) Expr {
+	e := parseUnary(sh)
+	for lc := precedence(sh.token); lc >= level; lc-- {
+		for precedence(sh.token) == lc {
+			op := sh.token
+			sh.next()
+			y := parseBinary(sh, lc+1)
+			e = binary{op: op, x: e, y: y}
+		}
+	}
+	return e
+}
+
+func precedence(token rune) int {
+	switch token {
+	case '%':
+		return 3
 	case '*', '/':
 		return 2
 	case '+', '-':
@@ -43,115 +93,56 @@ func precedence(op rune) int {
 	return 0
 }
 
-// ---- parser ----
+func parseUnary(sh *stringHelper) Expr {
+	op := sh.token
+	if op == '-' || op == '+' {
+		sh.next()
+		return unary{op: op, x: parseUnary(sh)}
+	}
+	return parseElement(sh)
+}
 
-// Parse parses the input string as an arithmetic expression.
-//
-//	expr = num                         a literal number, e.g., 3.14159
-//	     | id                          a variable name, e.g., x
-//	     | id '(' expr ',' ... ')'     a function call
-//	     | '-' expr                    a unary operator (+-)
-//	     | expr '+' expr               a binary operator (+-*/)
-func Parse(input string) (_ Expr, err error) {
-	defer func() {
-		switch x := recover().(type) {
-		case nil:
-			// no panic
-		case lexPanic:
-			err = fmt.Errorf("%s", x)
-		default:
-			// unexpected panic: resume state of panic.
-			panic(x)
+func parseElement(sh *stringHelper) Expr {
+	switch sh.token {
+	case scanner.Int | scanner.Float:
+		float, err := strconv.ParseFloat(sh.text(), 64)
+		if err != nil {
+			panic(typePanic(err.Error()))
 		}
-	}()
-	lex := new(lexer)
-	lex.scan.Init(strings.NewReader(input))
-	lex.scan.Mode = scanner.ScanIdents | scanner.ScanInts | scanner.ScanFloats
-	lex.next() // initial lookahead
-	e := parseExpr(lex)
-	if lex.token != scanner.EOF {
-		return nil, fmt.Errorf("unexpected %s", lex.describe())
-	}
-	return e, nil
-}
-
-func parseExpr(lex *lexer) Expr { return parseBinary(lex, 1) }
-
-// binary = unary ('+' binary)*
-// parseBinary stops when it encounters an
-// operator of lower precedence than prec1.
-func parseBinary(lex *lexer, prec1 int) Expr {
-	lhs := parseUnary(lex)
-	for prec := precedence(lex.token); prec >= prec1; prec-- {
-		for precedence(lex.token) == prec {
-			op := lex.token
-			lex.next() // consume operator
-			rhs := parseBinary(lex, prec+1)
-			lhs = binary{op, lhs, rhs}
-		}
-	}
-	return lhs
-}
-
-// unary = '+' expr | primary
-func parseUnary(lex *lexer) Expr {
-	if lex.token == '+' || lex.token == '-' {
-		op := lex.token
-		lex.next() // consume '+' or '-'
-		return unary{op, parseUnary(lex)}
-	}
-	return parsePrimary(lex)
-}
-
-// primary = id
-//
-//	| id '(' expr ',' ... ',' expr ')'
-//	| num
-//	| '(' expr ')'
-func parsePrimary(lex *lexer) Expr {
-	switch lex.token {
+		sh.next()
+		return literal(float)
 	case scanner.Ident:
-		id := lex.text()
-		lex.next() // consume Ident
-		if lex.token != '(' {
+		id := sh.text()
+		sh.next()
+		if '(' != sh.token {
 			return Var(id)
 		}
-		lex.next() // consume '('
+		sh.next()
 		var args []Expr
-		if lex.token != ')' {
+		if sh.token != ')' {
 			for {
-				args = append(args, parseExpr(lex))
-				if lex.token != ',' {
+				args = append(args, parseExpr(sh))
+				if sh.token != ',' {
 					break
 				}
-				lex.next() // consume ','
+				sh.next()
 			}
-			if lex.token != ')' {
-				msg := fmt.Sprintf("got %s, want ')'", lex.describe())
-				panic(lexPanic(msg))
+			if sh.token != ')' {
+				msg := fmt.Sprintf("end of %s function missing ')'", id)
+				panic(typePanic(msg))
 			}
 		}
-		lex.next() // consume ')'
-		return call{id, args}
-
-	case scanner.Int, scanner.Float:
-		f, err := strconv.ParseFloat(lex.text(), 64)
-		if err != nil {
-			panic(lexPanic(err.Error()))
-		}
-		lex.next() // consume number
-		return literal(f)
-
+		sh.next() //consumer )
+		return call{fn: id, args: args}
 	case '(':
-		lex.next() // consume '('
-		e := parseExpr(lex)
-		if lex.token != ')' {
-			msg := fmt.Sprintf("got %s, want ')'", lex.describe())
-			panic(lexPanic(msg))
+		sh.next()
+		plan := parseExpr(sh)
+		if sh.token != ')' {
+			panic(typePanic("lack of ')'"))
 		}
-		lex.next() // consume ')'
-		return e
+		sh.next() //consumer )
+		return plan
 	}
-	msg := fmt.Sprintf("unexpected %s", lex.describe())
-	panic(lexPanic(msg))
+	msg := fmt.Sprintf("unexpected %s", sh.describe())
+	panic(typePanic(msg))
 }

@@ -46,6 +46,8 @@ func (b binary) Eval(env Env) float64 {
 		return b.x.Eval(env) * b.y.Eval(env)
 	case '/':
 		return b.x.Eval(env) / b.y.Eval(env)
+	case '%':
+		return float64(int64(b.x.Eval(env)) % int64(b.y.Eval(env)))
 	}
 	panic(fmt.Sprintf("unsupported binary operator: %q", b.op))
 }

@@ -25,6 +25,11 @@ func TestEval(t *testing.T) {
 		{"-1 + -x", Env{"x": 1}, "-2"},
 		{"-1 - x", Env{"x": 1}, "-2"},
 		{"-1 - x *  (F - 32)", Env{"x": 1, "F": 0}, "31"},
+		{"(12)", Env{}, "12"},
+		{"(12+1)", Env{}, "13"},
+		{"12%1", Env{}, "0"},
+		{"5%2", Env{}, "1"},
+		{"1+2-5%F*2", Env{"F": 2}, "1"},
 		//!+Eval
 	}
 	var prevExpr string
@@ -50,12 +55,13 @@ func TestEval(t *testing.T) {
 
 func TestErrors(t *testing.T) {
 	for _, test := range []struct{ expr, wantErr string }{
-		{"x % 2", "unexpected '%'"},
 		{"math.Pi", "unexpected '.'"},
 		{"!true", "unexpected '!'"},
 		{`"hello"`, "unexpected '\"'"},
 		{"log(10)", `unknown function "log"`},
 		{"sqrt(1, 2)", "call to sqrt has 2 args, want 1"},
+		{"sqrt(1, 2", "end of sqrt function missing ')'"},
+		{"(1, 2", "lack of ')'"},
 	} {
 		expr, err := Parse(test.expr)
 		if err == nil {
@@ -76,14 +82,19 @@ func TestErrors(t *testing.T) {
 func TestParse2(t *testing.T) {
 
 	//exprString := "1+2.11"
-	//exprString := "-1 - x *  F - 32"
-	exprString := "pow(x, 3) + pow(y, 3)"
+	//exprString := "-1 - Max(x) * (F - 32)"
+	exprString := "(12)"
 
 	parse, err := Parse(exprString)
 
 	if err != nil {
-		log.Fatal("解析异常")
+		log.Fatal(err)
 	}
+
+	// 42: *
+	// 47: /
+	// 43: +
+	// 45: -
 
 	fmt.Println(parse.String())
 
