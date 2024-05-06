@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package protobufdemo;
+
+
+option go_package = "./protobufdemo";
+
+
+message H2 {
+  string name = 1;
+  int32 id = 2;  // Unique ID number for this person.
+}
